@@ -50,10 +50,10 @@ def parse_intent(prompt: str) -> Dict[str, Any]:
     REQUIREMENT: Return ONLY a raw JSON object. No conversational filler.
 
     VALID ACTIONS:
-    1. "open_url": Navigate to a website. Target: full URL.
+    1. "open_url": Navigate to a website. Target: full URL. (NOTE: If the user just says "open youtube" or "open yt" without a specific video, use this action with target "youtube.com").
     2. "open_app": Launch a local application. Target: app name.
     3. "chat": General conversation or queries not requiring system actions. Target: null.
-    4. "play_youtube": Stream media. Target: search query.
+    4. "play_youtube": Stream media. Target: search query. (NOTE: ONLY use this if the user specifies a song, topic, or video to play).
     5. "whatsapp_call": Initiate a voice call. Target: contact name.
     6. "whatsapp_message": Send a text payload. Target: "ContactName|Message".
     7. "open_local_file": Locate and launch a document. Target: filename.
@@ -161,24 +161,36 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
             if not target: return False, "Target application name missing."
             os_name: str = platform.system()
             target_lower: str = target.lower().strip()
+
             try:
-                # Protocol handling for modern apps
+                # 1. Native OS Execution (Silent Failures)
                 if os_name == "Windows":
-                    if "whatsapp" in target_lower: os.startfile("whatsapp://")
-                    elif "spotify" in target_lower: os.startfile("spotify:")
-                    else: subprocess.run(["cmd", "/c", "start", "", target], check=True)
-                elif os_name == "Darwin":
-                    subprocess.run(["open", "-a", target], check=True)
+                    if "whatsapp" in target_lower: 
+                        os.startfile("whatsapp://")
+                    elif "spotify" in target_lower: 
+                        os.startfile("spotify:")
+                    else:
+                        # os.startfile bypasses CMD. If it fails, it throws a silent 
+                        # Python error instead of a Windows popup!
+                        os.startfile(target)
+
+                elif os_name == "Darwin": # macOS
+                    subprocess.run(["open", "-a", target], check=True, stderr=subprocess.DEVNULL)
                 elif os_name == "Linux":
                     subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return True, f"Execution protocol initiated for '{target}'."
-            except Exception:
-                try:
-                    os.startfile(target)
-                    return True, f"Launched '{target}' via OS shell handler."
-                except Exception:
-                    return False, f"The system could not locate the application '{target}'."
 
+                return True, f"Execution protocol initiated for '{target}'."
+
+            except Exception:
+                # 2. SMART FALLBACK: Instantly catches the error and routes to the web
+                print(f"[*] Local app '{target}' not found. Engaging Web Fallback...")
+
+                # Using DuckDuckGo's '!ducky' bang to instantly jump to the first URL
+                search_query = target.replace(' ', '+')
+                fallback_url = f"https://duckduckgo.com/?q=!ducky+{search_query}"
+                
+                webbrowser.open(fallback_url)
+                return True, f"Local app not found. Routing '{target}' to the web."
         # --- 4. PRODUCTIVITY & MEDIA ---
         elif action == "take_note":
             return append_to_notes(target)

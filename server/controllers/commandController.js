@@ -2,61 +2,92 @@ import Command from "../models/Command.js";
 import axios from "axios";
 import { publishCommandToAI } from "../config/kafka.js"; // Adjust path if you used 'configs/kafka.js'
 
-// @desc    Process user command & push to Kafka
+// @desc    Process user command & append to thread
 // @route   POST /api/commands
 export const processCommand = async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const { prompt, chatId } = req.body; // <-- Extract chatId from frontend
 
-    if (!prompt) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a command prompt",
+    if (!prompt) return res.status(400).json({ success: false, message: "Please provide a prompt" });
+
+    let chatSession;
+    const newMessage = { prompt, status: "pending" };
+
+    // 1. If we are continuing a chat, push to it. Otherwise, create a new one.
+    if (chatId) {
+      chatSession = await Command.findById(chatId);
+      if (!chatSession) return res.status(404).json({ success: false, message: "Chat not found" });
+      
+      chatSession.messages.push(newMessage);
+      await chatSession.save();
+    } else {
+      // Create new chat. Use first 30 chars of prompt as title.
+      chatSession = await Command.create({
+        user: req.user._id,
+        title: prompt.substring(0, 30) + (prompt.length > 30 ? "..." : ""),
+        messages: [newMessage],
       });
     }
 
-    // 1. Create a pending command log in MongoDB
-    const command = await Command.create({
-      user: req.user._id,
-      prompt: prompt,
-      status: "pending",
-    });
+    // 2. Get the specific ID of the message we just created
+    const createdMessage = chatSession.messages[chatSession.messages.length - 1];
 
-    // 2. Direct HTTP Call to the Python Flask Engine
+    // 3. Send the MESSAGE ID to Python (Python doesn't need to know about the Chat Session)
     try {
       await axios.post("http://localhost:5000/execute", {
-        commandId: command._id,
+        commandId: createdMessage._id, // Send the sub-document ID
         prompt: prompt
       }, {
-        // THIS IS THE FIX: The Security Handshake
-        headers: {
-          'x-ai-api-key': process.env.AI_ENGINE_SECRET
-        }
+        headers: { 'x-ai-api-key': process.env.AI_ENGINE_SECRET }
       });
     } catch (pythonError) {
       console.error("⚠️ Python Engine Unreachable:", pythonError.message);
-      // We don't crash Node, we just let it stay pending (or mark as failed)
     }
 
-    // 3. Respond to the React frontend immediately (202 Accepted)
     res.status(202).json({
       success: true,
+      chatId: chatSession._id, // Tell React which chat we are in
       message: "Command sent to local engine",
-      command: command,
     });
   } catch (error) {
     console.error("❌ Process Command Error:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
+    res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };
 
-// @desc    Get user's command history
-// @route   GET /api/commands/history
-// @desc    Get user's command history
-// @route   GET /api/commands/history
+
+// @desc    Webhook: Update command status (Called by Python Engine)
+// @route   PUT /api/commands/:id/status
+export const updateCommandStatus = async (req, res) => {
+  try {
+    const messageId = req.params.id; // This is the createdMessage._id we sent to Python
+    const { status, aiResponse, actionTriggered, targetPath, errorMessage } = req.body;
+
+    // Build the update object dynamically
+    const updateFields = {};
+    if (status) updateFields["messages.$.status"] = status;
+    if (aiResponse) updateFields["messages.$.aiResponse"] = aiResponse;
+    if (actionTriggered) updateFields["messages.$.actionTriggered"] = actionTriggered;
+    if (targetPath) updateFields["messages.$.targetPath"] = targetPath;
+    if (errorMessage) updateFields["messages.$.errorMessage"] = errorMessage;
+
+    // Find the chat that contains this message, and update that specific message in the array
+    const chat = await Command.findOneAndUpdate(
+      { "messages._id": messageId },
+      { $set: updateFields },
+      { returnDocument: 'after' } // <--- THE NEW MONGOOSE STANDARD
+    );
+
+    if (!chat) return res.status(404).json({ success: false, message: "Message not found" });
+
+    res.status(200).json({ success: true, message: "Status updated" });
+  } catch (error) {
+    console.error("❌ Update Command Status Error:", error.message);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+
 export const getCommandHistory = async (req, res) => {
   try {
     // Fetch the interactions for the logged-in user, newest first
@@ -77,46 +108,6 @@ export const getCommandHistory = async (req, res) => {
     });
   }
 };
-
-// @desc    Webhook: Update command status (Called by Python Engine)
-// @route   PUT /api/commands/:id/status
-export const updateCommandStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, aiResponse, actionTriggered, targetPath, errorMessage } = req.body;
-
-    const command = await Command.findById(id);
-
-    if (!command) {
-      return res.status(404).json({
-        success: false,
-        message: "Command not found",
-      });
-    }
-
-    // Update fields if they are provided in the request
-    if (status) command.status = status;
-    if (aiResponse) command.aiResponse = aiResponse;
-    if (actionTriggered) command.actionTriggered = actionTriggered;
-    if (targetPath) command.targetPath = targetPath;
-    if (errorMessage) command.errorMessage = errorMessage;
-
-    await command.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Command updated successfully",
-      command: command,
-    });
-  } catch (error) {
-    console.error("❌ Update Command Status Error:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
-  }
-};
-
 export const clearCommandHistory = async (req, res) => {
   try {
     // Delete all commands where the 'user' field matches the authenticated user's ID

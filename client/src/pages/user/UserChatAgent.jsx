@@ -30,7 +30,7 @@ const UserChatAgent = () => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [activeCommand, isProcessing]);
+  }, [activeCommand?.messages, isProcessing]);
 
   // Auto-resize the textarea based on content
   const handleInput = (e) => {
@@ -48,7 +48,7 @@ const UserChatAgent = () => {
     return []; 
   };
 
-  // --- 1. FETCH ACTIVE COMMAND ---
+  // --- 1. FETCH ACTIVE CHAT THREAD ---
   useEffect(() => {
     const fetchCommand = async () => {
       if (!chatId) {
@@ -63,16 +63,16 @@ const UserChatAgent = () => {
         });
         
         const historyData = extractHistoryArray(res.data);
-        const foundCommand = historyData.find(cmd => cmd._id === chatId);
+        const foundChat = historyData.find(chat => chat._id === chatId);
         
-        if (foundCommand) {
-          setActiveCommand(foundCommand);
+        if (foundChat) {
+          setActiveCommand(foundChat);
         } else {
-          toast.error("Command record not found.");
+          toast.error("Chat session not found.");
           navigate("/user/dashboard");
         }
       } catch (err) {
-        console.error("Failed to load command:", err);
+        console.error("Failed to load chat:", err);
         toast.error("Failed to sync with database.");
       } finally {
         setLoadingCommand(false);
@@ -86,9 +86,10 @@ const UserChatAgent = () => {
   useEffect(() => {
     let pollInterval;
     let pollCount = 0;
-    const MAX_POLLS = 30; // 60 seconds max timeout (2s * 30) to prevent infinite memory leaks
+    const MAX_POLLS = 30; // 60 seconds max timeout
 
-    const isPending = activeCommand?.status === "pending" || activeCommand?.status === "processing";
+    const lastMessage = activeCommand?.messages?.[activeCommand.messages.length - 1];
+    const isPending = lastMessage?.status === "pending" || lastMessage?.status === "processing";
 
     if (isPending) {
       pollInterval = setInterval(async () => {
@@ -97,21 +98,29 @@ const UserChatAgent = () => {
         if (pollCount >= MAX_POLLS) {
           clearInterval(pollInterval);
           toast.error("Execution timed out. Python Engine may be offline.");
-          setActiveCommand(prev => ({ ...prev, status: "failed", errorMessage: "System timeout. Engine unreachable." }));
+          
+          setActiveCommand(prev => {
+            if (!prev) return prev;
+            const newMessages = [...prev.messages];
+            newMessages[newMessages.length - 1].status = "failed";
+            newMessages[newMessages.length - 1].errorMessage = "System timeout. Engine unreachable.";
+            return { ...prev, messages: newMessages };
+          });
           return;
         }
 
         try {
           const res = await axios.get(`${backendUrl}/api/commands/history`, { withCredentials: true });
           const historyData = extractHistoryArray(res.data);
-          const updatedCommand = historyData.find(cmd => cmd._id === chatId);
+          const updatedChat = historyData.find(chat => chat._id === chatId);
 
-          if (updatedCommand) {
-            setActiveCommand(updatedCommand);
-            // If the engine finishes, stop polling instantly
-            if (updatedCommand.status === "completed" || updatedCommand.status === "failed") {
+          if (updatedChat) {
+            setActiveCommand(updatedChat);
+            
+            const freshLastMsg = updatedChat.messages[updatedChat.messages.length - 1];
+            if (freshLastMsg.status === "completed" || freshLastMsg.status === "failed") {
               clearInterval(pollInterval);
-              if (updatedCommand.status === "completed") toast.success("Execution Complete");
+              if (freshLastMsg.status === "completed") toast.success("Execution Complete");
             }
           }
         } catch (err) {
@@ -121,7 +130,7 @@ const UserChatAgent = () => {
     }
 
     return () => clearInterval(pollInterval);
-  }, [activeCommand?.status, chatId, backendUrl]); 
+  }, [activeCommand?.messages, chatId, backendUrl]); 
 
   // --- 3. SUBMIT NEW COMMAND ---
   const handleSubmit = async (e) => {
@@ -131,7 +140,6 @@ const UserChatAgent = () => {
     const userPrompt = inputText.trim();
     setInputText("");
     
-    // Reset textarea height
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     
     setIsProcessing(true);
@@ -139,14 +147,21 @@ const UserChatAgent = () => {
     try {
       const res = await axios.post(
         `${backendUrl}/api/commands`, 
-        { prompt: userPrompt },
+        { 
+          prompt: userPrompt,
+          chatId: chatId 
+        },
         { withCredentials: true }
       );
 
-      if (res.data.success) {
-        const newCommandId = res.data.command?._id || res.data.data?._id;
-        if (newCommandId) {
-          navigate(`/user/dashboard?chat=${newCommandId}`);
+      if (res.data.success && res.data.chatId) {
+        if (chatId !== res.data.chatId) {
+          navigate(`/user/dashboard?chat=${res.data.chatId}`);
+        } else {
+          const historyRes = await axios.get(`${backendUrl}/api/commands/history`, { withCredentials: true });
+          const historyData = extractHistoryArray(historyRes.data);
+          const updatedChat = historyData.find(chat => chat._id === chatId);
+          if (updatedChat) setActiveCommand(updatedChat);
         }
       } else {
         toast.error(res.data.message || "Execution dispatch failed");
@@ -180,10 +195,11 @@ const UserChatAgent = () => {
   return (
     <div className="flex flex-col h-full relative z-10 font-sans">
       
-      {/* CHAT/DISPLAY AREA */}
+      {/* CHAT DISPLAY AREA */}
       <div className="flex-1 overflow-y-auto custom-scrollbar pb-40 pt-6 px-4 md:px-8">
         
         <AnimatePresence mode="wait">
+          
           {/* EMPTY STATE */}
           {!chatId && !loadingCommand && !isProcessing && (
             <motion.div 
@@ -221,7 +237,7 @@ const UserChatAgent = () => {
             </motion.div>
           )}
 
-          {/* LOADING LOGS */}
+          {/* LOADING STATE */}
           {loadingCommand && (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center h-full text-gray-500">
               <div className="w-10 h-10 border-2 border-fuchsia-500/20 border-t-fuchsia-500 rounded-full animate-spin mb-6"></div>
@@ -229,92 +245,75 @@ const UserChatAgent = () => {
             </motion.div>
           )}
 
-          {/* ACTIVE TERMINAL DISPLAY */}
+          {/* ACTIVE CHAT DISPLAY */}
           {activeCommand && !loadingCommand && (
-            <motion.div 
-              key="active-command"
-              initial={{ opacity: 0, y: 10 }} 
-              animate={{ opacity: 1, y: 0 }}
-              className="max-w-4xl mx-auto space-y-8 pb-10"
-            >
-              
-              {/* User Prompt */}
-              <div className="flex justify-end">
-                <div className="bg-gradient-to-br from-violet-600/20 to-fuchsia-600/20 border border-fuchsia-500/20 text-white px-6 py-4 rounded-2xl rounded-tr-sm max-w-[85%] shadow-[0_0_30px_rgba(168,85,247,0.1)] backdrop-blur-md">
-                  <p className="text-[16px] leading-relaxed">{activeCommand.prompt}</p>
-                </div>
-              </div>
-
-              {/* System Execution Terminal */}
-              <div className="flex justify-start">
-                <div className="bg-[#0A0A0F] border border-white/10 w-full max-w-[90%] rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+            <div className="max-w-4xl mx-auto space-y-12 pb-10">
+              {activeCommand.messages?.map((msg, index) => (
+                <motion.div 
+                  key={msg._id || index}
+                  initial={{ opacity: 0, y: 10 }} 
+                  animate={{ opacity: 1, y: 0 }}
+                  className="space-y-8"
+                >
                   
-                  {/* Terminal Header */}
-                  <div className="bg-white/5 border-b border-white/5 px-5 py-3 flex items-center justify-between backdrop-blur-xl">
-                    <div className="flex items-center gap-3">
-                      <Cpu className={`w-5 h-5 ${activeCommand.status === 'completed' ? 'text-green-400' : 'text-fuchsia-400'}`} />
-                      <span className="text-xs font-mono tracking-widest text-gray-300 uppercase">Nexus Core Logic</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-black/30 px-3 py-1 rounded-full border border-white/5">
-                      <span className={`text-[11px] font-mono uppercase tracking-wider ${activeCommand.status === 'completed' ? 'text-green-400' : activeCommand.status === 'failed' ? 'text-red-400' : 'text-fuchsia-400'}`}>
-                        {activeCommand.status}
-                      </span>
-                      {renderStatusIcon(activeCommand.status)}
+                  {/* User Prompt */}
+                  <div className="flex justify-end">
+                    <div className="bg-gradient-to-br from-violet-600/20 to-fuchsia-600/20 border border-fuchsia-500/20 text-white px-6 py-4 rounded-2xl rounded-tr-sm max-w-[85%] shadow-[0_0_30px_rgba(168,85,247,0.1)] backdrop-blur-md">
+                      <p className="text-[16px] leading-relaxed">{msg.prompt}</p>
                     </div>
                   </div>
 
-                  {/* Terminal Body */}
-                  <div className="p-6 font-mono text-sm space-y-6">
-                    
-                    {/* Telemetry Metadata */}
-                    {(activeCommand.actionTriggered || activeCommand.targetPath) && (
-                      <div className="bg-black/50 rounded-xl p-4 border border-white/5 space-y-3">
-                        {activeCommand.actionTriggered && (
-                          <div className="flex items-start gap-4">
-                            <span className="text-fuchsia-500 shrink-0 opacity-70">EXEC_ROUTE:</span>
-                            <span className="text-gray-200 tracking-wide">{activeCommand.actionTriggered}</span>
-                          </div>
-                        )}
-                        {activeCommand.targetPath && (
-                          <div className="flex items-start gap-4">
-                            <span className="text-violet-400 shrink-0 opacity-70">TGT_PAYLOAD:</span>
-                            <span className="text-gray-200 break-all">{activeCommand.targetPath}</span>
-                          </div>
-                        )}
+                  {/* System Execution Terminal */}
+                  <div className="flex justify-start">
+                    <div className="bg-[#0A0A0F] border border-white/10 w-full max-w-[90%] rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+                      
+                      {/* HEADER */}
+                      <div className="bg-white/5 border-b border-white/5 px-5 py-3 flex items-center justify-between backdrop-blur-xl">
+                        <div className="flex items-center gap-3">
+                          <Cpu className={`w-5 h-5 ${msg.status === 'completed' ? 'text-green-400' : 'text-fuchsia-400'}`} />
+                          <span className="text-xs font-mono tracking-widest text-gray-300 uppercase">Nexus Core Logic</span>
+                        </div>
+                        <div className="flex items-center gap-2 bg-black/30 px-3 py-1 rounded-full border border-white/5">
+                          <span className={`text-[11px] font-mono uppercase tracking-wider ${msg.status === 'completed' ? 'text-green-400' : msg.status === 'failed' ? 'text-red-400' : 'text-fuchsia-400'}`}>
+                            {msg.status}
+                          </span>
+                          {renderStatusIcon(msg.status)}
+                        </div>
                       </div>
-                    )}
 
-                    {/* AI / System Response */}
-                    <div className="flex gap-4 items-start">
-                      <ChevronRight className="w-5 h-5 text-fuchsia-500 shrink-0 mt-0.5" />
-                      <div className={`leading-relaxed text-[15px] whitespace-pre-wrap ${activeCommand.status === 'pending' || activeCommand.status === 'processing' ? 'text-gray-500 animate-pulse' : 'text-gray-100'}`}>
-                        {activeCommand.aiResponse}
+                      {/* BODY (Removed the action/target block completely) */}
+                      <div className="p-6 font-mono text-sm space-y-6">
+                        
+                        <div className="flex gap-4 items-start">
+                          <ChevronRight className="w-5 h-5 text-fuchsia-500 shrink-0 mt-0.5" />
+                          <div className={`leading-relaxed text-[15px] whitespace-pre-wrap ${msg.status === 'pending' || msg.status === 'processing' ? 'text-gray-500 animate-pulse' : 'text-gray-100'}`}>
+                            {msg.aiResponse}
+                          </div>
+                        </div>
+
+                        {msg.status === "failed" && msg.errorMessage && (
+                          <div className="mt-4 p-4 bg-red-950/30 border border-red-500/20 rounded-xl text-red-400 flex items-start gap-3">
+                            <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                            <span className="leading-relaxed">{msg.errorMessage}</span>
+                          </div>
+                        )}
+
                       </div>
                     </div>
-
-                    {/* Error Output */}
-                    {activeCommand.status === "failed" && activeCommand.errorMessage && (
-                      <div className="mt-4 p-4 bg-red-950/30 border border-red-500/20 rounded-xl text-red-400 flex items-start gap-3">
-                        <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                        <span className="leading-relaxed">{activeCommand.errorMessage}</span>
-                      </div>
-                    )}
-
                   </div>
-                </div>
-              </div>
 
-            </motion.div>
+                </motion.div>
+              ))}
+            </div>
           )}
-        </AnimatePresence>
 
+        </AnimatePresence>
         <div ref={messagesEndRef} className="h-4" />
       </div>
 
-      {/* INPUT AREA */}
+      {/* FIXED INPUT AREA */}
       <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#05050A] via-[#05050A]/95 to-transparent pt-12 pb-8 px-4 md:px-8 z-20">
         
-        {/* Processing Indicator */}
         <AnimatePresence>
           {isProcessing && (
              <motion.div 

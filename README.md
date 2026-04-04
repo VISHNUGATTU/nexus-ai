@@ -73,7 +73,7 @@ Utilize OAuth 2.0 for secure authentication and authorization, with encrypted to
 This project is licensed under the MIT License.
 
 ## Support Contact
-For any queries or support needs, please reach out to support@nexusai.com.
+For any queries or support needs, please reach out to gattuvishnuphani@gmail.com
 
 ## Developer Attribution
-Developed by the NexusAI Team.
+Developed by Gattu Vishnu Phani.

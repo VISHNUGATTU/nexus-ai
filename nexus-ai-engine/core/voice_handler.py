@@ -5,17 +5,25 @@ from typing import Optional
 
 # --- SYSTEM CONFIGURATION ---
 # Initialize the offline Text-to-Speech engine
+# --- SYSTEM CONFIGURATION ---
 try:
     engine = pyttsx3.init()
-    
-    # Optional: Tweak the voice to sound more "AI" and less robotic
     voices = engine.getProperty('voices')
-    # On Windows, voices[0] is usually male (David), voices[1] is usually female (Zira)
-    if len(voices) > 1:
-        engine.setProperty('voice', voices[1].id) 
-        
-    engine.setProperty('rate', 175)    # Speed of speech (words per minute)
-    engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0)
+    
+    # 1. Search for the strongest Male voice available
+    for voice in voices:
+        # Look for David, Mark (US), or George (UK)
+        name = voice.name.lower()
+        if 'david' in name or 'mark' in name or 'george' in name or 'male' in name:
+            engine.setProperty('voice', voice.id)
+            break
+            
+    # 2. COMMANDING TWEAKS
+    # Normal conversation is ~175. Dropping it to 145 makes the AI sound 
+    # highly deliberate, cold, and authoritative. 
+    engine.setProperty('rate', 145)    
+    engine.setProperty('volume', 1.0)  
+    
 except Exception as e:
     print(f"[!] Warning: TTS Engine failed to initialize. Error: {e}")
 

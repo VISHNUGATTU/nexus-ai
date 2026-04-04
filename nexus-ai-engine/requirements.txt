@@ -1,0 +1,20 @@
+# --- Core Framework & APIs ---
+Flask==3.0.0
+flask-cors
+requests==2.31.0
+google-generativeai
+python-dotenv==1.0.0
+
+# --- Desktop & Automation ---
+pyautogui
+pyperclip
+psutil
+
+# --- External Data & Web ---
+yfinance
+wikipedia
+duckduckgo-search
+pywhatkit
+
+# --- Vision & Imaging ---
+Pillow

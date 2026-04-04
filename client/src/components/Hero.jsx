@@ -56,7 +56,7 @@ export default function Hero() {
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ type: "spring", stiffness: 200, damping: 50, delay: 0.2 }}
               >
-                Stop clicking around. Use natural language to instantly open VS Code, navigate to YouTube, launch your mail, or execute complex system workflows in milliseconds.
+                Stop clicking around. Use natural language to instantly open VS Code, navigate to YouTube, launch your mail, or execute complex system workflows in seconds.
               </motion.p>
 
               <motion.div

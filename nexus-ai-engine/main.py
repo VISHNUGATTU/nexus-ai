@@ -5,6 +5,7 @@ import requests
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from core.voice_handler import speak
 
 # Safely handle CORS for seamless React/Node integration
 try:
@@ -50,15 +51,20 @@ def process_command_background(command_id: str, prompt: str) -> None:
         # 2. Hardware / OS Execution
         success, result_msg = execute_action(action, target)
             
-        # 3. Dynamic Response Matrix
+       # 3. Dynamic Response Matrix
         if success and result_msg:
             ai_response = result_msg
             error_msg = None
         else:
             error_msg = result_msg if not success else None
+            
+        # --- THE VOICE UPGRADE ---
+        # Speak the final response aloud before sending it to the UI
+        speak(ai_response)
+        # -------------------------
                 
         # 4. Webhook Sync (Database Update)
-        status: str = "completed" if success else "failed"
+        status = "completed" if success else "failed"
         
         payload: Dict[str, Any] = {
             "status": status,

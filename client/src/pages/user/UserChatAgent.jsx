@@ -4,7 +4,7 @@ import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Send, Terminal, Cpu, CheckCircle2, 
-  Clock, XCircle, ChevronRight, Sparkles 
+  Clock, XCircle, ChevronRight, Sparkles, Mic // <--- ADDED MIC
 } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import toast from "react-hot-toast";
@@ -19,10 +19,52 @@ const UserChatAgent = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeCommand, setActiveCommand] = useState(null);
   const [loadingCommand, setLoadingCommand] = useState(false);
-
+  const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
+  // --- VOICE RECOGNITION LOGIC ---
+  const handleVoiceInput = () => {
+    // Check if the browser supports the Web Speech API
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error("Your browser does not support Voice Input.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true; // Shows text as you speak
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      toast.success("Microphone Hot. I am listening...", { icon: '🎙️' });
+    };
+
+    recognition.onresult = (event) => {
+      // Grab the transcribed text and put it in the input box
+      const currentTranscript = event.results[0][0].transcript;
+      setInputText(currentTranscript);
+      
+      // Auto-resize the text box as it fills with words
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error("Voice Error:", event.error);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
+  };
   // --- UI HELPERS ---
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -327,36 +369,51 @@ const UserChatAgent = () => {
         </AnimatePresence>
 
         <form 
-          onSubmit={handleSubmit}
-          className="max-w-4xl mx-auto relative flex items-end gap-3 bg-[#12121A]/90 backdrop-blur-2xl border border-white/10 rounded-2xl p-2.5 shadow-[0_10px_50px_rgba(0,0,0,0.5)] focus-within:border-fuchsia-500/50 focus-within:shadow-[0_0_40px_rgba(168,85,247,0.2)] transition-all duration-300"
-        >
-          <div className="p-3 text-fuchsia-500/50">
-            <Sparkles className="w-6 h-6" />
-          </div>
-          
-          <textarea
-            ref={textareaRef}
-            value={inputText}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            placeholder="Initialize execution sequence... (Shift+Enter for new line)"
-            className="w-full max-h-[150px] min-h-[44px] bg-transparent border-none text-white placeholder:text-gray-600 focus:outline-none resize-none py-3 text-[16px] custom-scrollbar leading-relaxed"
-            rows="1"
-            disabled={isProcessing}
-          />
-
-          <button
-            type="submit"
-            disabled={!inputText.trim() || isProcessing}
-            className="p-3.5 rounded-xl bg-white/5 text-gray-400 hover:text-white hover:bg-fuchsia-600 hover:shadow-[0_0_20px_rgba(192,38,211,0.5)] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed mb-0.5 mr-0.5 flex items-center justify-center"
+            onSubmit={handleSubmit}
+            className="max-w-4xl mx-auto relative flex items-end gap-3 bg-[#12121A]/90 backdrop-blur-2xl border border-white/10 rounded-2xl p-2.5 shadow-[0_10px_50px_rgba(0,0,0,0.5)] focus-within:border-fuchsia-500/50 focus-within:shadow-[0_0_40px_rgba(168,85,247,0.2)] transition-all duration-300"
           >
-            {isProcessing ? (
-               <div className="w-5 h-5 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
-            ) : (
-               <Send className="w-5 h-5 translate-x-0.5 -translate-y-0.5" />
-            )}
-          </button>
-        </form>
+            <div className="p-3 text-fuchsia-500/50">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            
+            <textarea
+              ref={textareaRef}
+              value={inputText}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              placeholder="Initialize execution sequence... (Shift+Enter for new line)"
+              className="w-full max-h-[150px] min-h-[44px] bg-transparent border-none text-white placeholder:text-gray-600 focus:outline-none resize-none py-3 text-[16px] custom-scrollbar leading-relaxed"
+              rows="1"
+              disabled={isProcessing || isListening}
+            />
+
+            {/* --- VOICE BUTTON --- */}
+            <button
+              type="button"
+              onClick={handleVoiceInput}
+              disabled={isProcessing}
+              className={`p-3.5 rounded-xl transition-all duration-300 flex items-center justify-center mb-0.5 ${
+                isListening 
+                  ? "bg-fuchsia-500/20 text-fuchsia-400 shadow-[0_0_20px_rgba(168,85,247,0.4)] animate-pulse" 
+                  : "bg-transparent text-gray-500 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <Mic className="w-5 h-5" />
+            </button>
+
+            {/* --- SEND BUTTON --- */}
+            <button
+              type="submit"
+              disabled={!inputText.trim() || isProcessing}
+              className="p-3.5 rounded-xl bg-white/5 text-gray-400 hover:text-white hover:bg-fuchsia-600 hover:shadow-[0_0_20px_rgba(192,38,211,0.5)] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed mb-0.5 mr-0.5 flex items-center justify-center"
+            >
+              {isProcessing ? (
+                 <div className="w-5 h-5 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
+              ) : (
+                 <Send className="w-5 h-5 translate-x-0.5 -translate-y-0.5" />
+              )}
+            </button>
+          </form>
         
         <div className="text-center mt-4">
           <p className="text-[11px] text-gray-500 font-mono tracking-widest uppercase">

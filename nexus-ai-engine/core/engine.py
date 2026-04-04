@@ -4,9 +4,12 @@ import re
 import platform
 import subprocess
 import webbrowser
+import pyautogui
+import ctypes
 from typing import Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
 from google import genai
+from core.voice_handler import speak
 
 # --- CORE MODULE IMPORTS ---
 from core.media_controller import play_youtube_video
@@ -162,16 +165,40 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
             os_name: str = platform.system()
             target_lower: str = target.lower().strip()
 
+            # --- ALIAS ROUTER FOR BUILT-IN OS APPS ---
+            if os_name == "Windows":
+                aliases = {
+                    "control panel": "control",
+                    "task manager": "taskmgr",
+                    "calculator": "calc",
+                    "settings": "ms-settings:",
+                    "notepad": "notepad",
+                    "command prompt": "cmd",
+                    "terminal": "wt"
+                }
+                if target_lower in aliases:
+                    target = aliases[target_lower]
+                    target_lower = target.lower()
+
+            # --- THE "FORCE FOCUS" HACK ---
+            # Bypasses Windows Focus Stealing Prevention so apps open in the foreground
+            if os_name == "Windows":
+                try:
+                    # 1. Tap the 'alt' key to register fake hardware input with the OS
+                    pyautogui.press('alt')
+                    # 2. Tell the OS kernel to allow the next launched process to take the foreground
+                    ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                except Exception:
+                    pass
+
             try:
-                # 1. Native OS Execution (Silent Failures)
+                # 1. Native OS Execution
                 if os_name == "Windows":
                     if "whatsapp" in target_lower: 
                         os.startfile("whatsapp://")
                     elif "spotify" in target_lower: 
                         os.startfile("spotify:")
                     else:
-                        # os.startfile bypasses CMD. If it fails, it throws a silent 
-                        # Python error instead of a Windows popup!
                         os.startfile(target)
 
                 elif os_name == "Darwin": # macOS
@@ -182,13 +209,18 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
                 return True, f"Execution protocol initiated for '{target}'."
 
             except Exception:
-                # 2. SMART FALLBACK: Instantly catches the error and routes to the web
+                # 2. SMART FALLBACK: Web Routing
                 print(f"[*] Local app '{target}' not found. Engaging Web Fallback...")
 
-                # Using DuckDuckGo's '!ducky' bang to instantly jump to the first URL
                 search_query = target.replace(' ', '+')
                 fallback_url = f"https://duckduckgo.com/?q=!ducky+{search_query}"
                 
+                # Re-apply the focus hack right before the browser opens
+                if os_name == "Windows":
+                    try:
+                        pyautogui.press('alt')
+                    except:
+                        pass
                 webbrowser.open(fallback_url)
                 return True, f"Local app not found. Routing '{target}' to the web."
         # --- 4. PRODUCTIVITY & MEDIA ---

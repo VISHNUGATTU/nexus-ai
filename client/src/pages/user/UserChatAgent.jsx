@@ -20,50 +20,77 @@ const UserChatAgent = () => {
   const [activeCommand, setActiveCommand] = useState(null);
   const [loadingCommand, setLoadingCommand] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
   // --- VOICE RECOGNITION LOGIC ---
-  const handleVoiceInput = () => {
-    // Check if the browser supports the Web Speech API
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      toast.error("Your browser does not support Voice Input.");
+  const handleVoiceInput = async () => {
+    // If already listening, stop recording and send to Whisper
+    if (isListening && mediaRecorderRef.current) {
+      toast.loading("Whisper is transcribing...", { id: 'whisper-toast' });
+      
+      // Wait half a second before cutting the mic to catch the last word
+      setTimeout(() => {
+        mediaRecorderRef.current.stop();
+        setIsListening(false);
+      }, 500); 
+      
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true; // Shows text as you speak
-    recognition.lang = 'en-US';
+    // Start recording
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
 
-    recognition.onstart = () => {
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorderRef.current.onstop = async () => {
+        // Stop the microphone tracks to clear the red dot in the browser tab
+        stream.getTracks().forEach(track => track.stop());
+
+        // Package the audio
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio', audioBlob);
+
+        try {
+          // Send to your new Python Whisper endpoint
+          const res = await axios.post("http://localhost:5000/api/transcribe", formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+
+          if (res.data.success && res.data.text) {
+            setInputText(res.data.text);
+            toast.success("Transcription complete", { id: 'whisper-toast' });
+            
+            // Auto-resize textarea
+            if (textareaRef.current) {
+              textareaRef.current.style.height = "auto";
+              textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+            }
+          } else {
+            toast.error("Whisper could not hear you.", { id: 'whisper-toast' });
+          }
+        } catch (error) {
+          console.error("Transcription error:", error);
+          toast.error("Engine failed to process audio.", { id: 'whisper-toast' });
+        }
+      };
+
+      // Begin capturing audio
+      mediaRecorderRef.current.start();
       setIsListening(true);
-      toast.success("Microphone Hot. I am listening...", { icon: '🎙️' });
-    };
+      toast.success("Mic Hot. Speak, then click the mic again to transcribe.", { icon: '🎙️' });
 
-    recognition.onresult = (event) => {
-      // Grab the transcribed text and put it in the input box
-      const currentTranscript = event.results[0][0].transcript;
-      setInputText(currentTranscript);
-      
-      // Auto-resize the text box as it fills with words
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.error("Voice Error:", event.error);
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
+    } catch (err) {
+      toast.error("Microphone access denied by OS.");
+    }
   };
   // --- UI HELPERS ---
   const scrollToBottom = () => {

@@ -6,6 +6,8 @@ import subprocess
 import webbrowser
 import pyautogui
 import ctypes
+import difflib
+import json
 from typing import Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
 from google import genai
@@ -25,6 +27,29 @@ from core.knowledge_controller import fetch_wikipedia_summary
 from core.vision_controller import analyze_screen
 from core.web_researcher import perform_web_search
 
+
+# --- MASTER CAPABILITY REGISTRY ---
+# To add a new skill to Nexus, simply add it to this dictionary.
+# The AI will dynamically learn it upon the next execution.
+NEXUS_TOOLS = {
+    "open_url": "Navigate to a website. Target: full URL. (Use this for 'open youtube' -> 'youtube.com').",
+    "open_app": "Launch a local application. Target: The exact OS executable command dynamically translated (e.g., 'open Control Panel' -> 'control'). Do not use display names.",
+    "chat": "General conversation, math calculations, coding questions, or knowledge NOT requiring a computer action. Target: null. (Provide the actual factual answer in the response field).",
+    "play_youtube": "Stream media. Target: search query. (Only if user specifies a song/video to play).",
+    "whatsapp_call": "Initiate a voice call. Target: contact name.",
+    "whatsapp_message": "Send a text payload. Target: 'ContactName|Message'.",
+    "open_local_file": "Locate and launch a document. Target: filename.",
+    "send_email": "Transmit an email. Target: 'EmailAddress|Subject|Body'.",
+    "system_control": "Hardware/OS control. Target: 'mute', 'volume_up', 'volume_down', 'play_pause', 'lock'.",
+    "take_note": "Record information to the Second Brain. Target: note content.",
+    "check_stock": "Live financial data. Target: Stock Ticker Symbol (e.g., TSLA).",
+    "check_vitals": "Hardware telemetry (CPU, RAM). Target: null.",
+    "read_clipboard": "Access OS clipboard buffer. Target: null.",
+    "fetch_knowledge": "Encyclopedic facts via Wikipedia. Target: specific topic.",
+    "analyze_screen": "Multimodal optical analysis of the monitor. Target: user's question.",
+    "web_search": "Live internet scraping for news/weather/data. Target: search query."
+}
+
 # --- SYSTEM BOOT & VALIDATION ---
 load_dotenv()
 GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
@@ -38,41 +63,27 @@ INTENT_MODEL_VERSION = 'gemini-2.5-flash'
 def parse_intent(prompt: str) -> Dict[str, Any]:
     """
     Acts as the Intelligence Layer. Translates natural language into structured system execution schemas.
-    Utilizes Regex extraction to guarantee JSON compliance.
-    
-    Args:
-        prompt (str): The raw user command.
-        
-    Returns:
-        Dict[str, Any]: A parsed dictionary containing the action, target, and AI response.
+    Dynamically loads capabilities from the NEXUS_TOOLS registry.
     """
+    
+    # 1. Dynamically build the list of valid actions from our dictionary
+    action_list = "\n".join(
+        [f"    {i+1}. \"{action}\": {description}" for i, (action, description) in enumerate(NEXUS_TOOLS.items())]
+    )
+
+    # 2. Inject the dynamic list into the prompt
     system_prompt: str = f"""
     You are the core intelligence router of the Nexus AI Execution Engine.
-    Map the user's command to the correct system action.
+    Map the user's command to the correct system action based on the available capabilities.
     
     REQUIREMENT: Return ONLY a raw JSON object. No conversational filler.
 
-    VALID ACTIONS:
-    1. "open_url": Navigate to a website. Target: full URL. (NOTE: If the user just says "open youtube" or "open yt" without a specific video, use this action with target "youtube.com").
-    2. "open_app": Launch a local application. Target: app name.
-    3. "chat": General conversation or queries not requiring system actions. Target: null.
-    4. "play_youtube": Stream media. Target: search query. (NOTE: ONLY use this if the user specifies a song, topic, or video to play).
-    5. "whatsapp_call": Initiate a voice call. Target: contact name.
-    6. "whatsapp_message": Send a text payload. Target: "ContactName|Message".
-    7. "open_local_file": Locate and launch a document. Target: filename.
-    8. "send_email": Transmit an email. Target: "EmailAddress|Subject|Body".
-    9. "system_control": Hardware/OS control. Target: "mute", "volume_up", "volume_down", "play_pause", "lock".
-    10. "take_note": Record information to the Second Brain. Target: note content.
-    11. "check_stock": Live financial data. Target: Stock Ticker Symbol (e.g., TSLA).
-    12. "check_vitals": Hardware telemetry (CPU, RAM). Target: null.
-    13. "read_clipboard": Access OS clipboard buffer. Target: null.
-    14. "fetch_knowledge": Encyclopedic facts via Wikipedia. Target: specific topic.
-    15. "analyze_screen": Multimodal optical analysis of the monitor. Target: the user's question.
-    16. "web_search": Live internet scraping for news/weather/data. Target: search query.
+    AVAILABLE SYSTEM ACTIONS:
+{action_list}
 
     SCHEMA:
     {{
-        "action": "string",
+        "action": "string (MUST exactly match one of the actions listed above)",
         "target": "string" | null,
         "response": "short conversational confirmation"
     }}
@@ -87,14 +98,16 @@ def parse_intent(prompt: str) -> Dict[str, Any]:
         )
         raw_text: str = response.text.strip()
         
-        # Robust JSON Extraction: Mathematically isolate the JSON payload 
-        # even if the LLM hallucinates markdown ticks or conversational text
+        # Robust JSON Extraction
+        import re
+        import json
         json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+        
         if not json_match:
             print(f"[!] Intent Parsing Warning: No valid JSON block found in LLM payload.")
             raise ValueError("JSON block extraction failed.")
             
-        parsed_data: Dict[str, Any] = json.loads(json_match.group())
+        parsed_data = json.loads(json_match.group())
         
         if "action" not in parsed_data or "response" not in parsed_data:
             raise KeyError("Payload missing required routing keys.")
@@ -141,7 +154,30 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
         elif action == "whatsapp_message":
             if not target or "|" not in target: return False, "Invalid WhatsApp payload format."
             parts = target.split("|", 1)
-            return send_whatsapp_message(parts[0].strip(), parts[1].strip())
+            contact_name = parts[0].strip()
+            message_body = parts[1].strip()
+
+            # --- DYNAMIC FUZZY LOGIC ROUTER ---
+            try:
+                # Load your dynamic external phonebook
+                with open("contacts.json", "r") as f:
+                    phonebook = json.load(f)
+                
+                # difflib mathematically compares what you said vs your actual contacts.
+                # cutoff=0.4 means it will accept a 40% match (so "bhanu" matches "Bhanu Prakash")
+                matches = difflib.get_close_matches(contact_name, phonebook, n=1, cutoff=0.4)
+                
+                if matches:
+                    print(f"[*] Fuzzy Match Found: '{contact_name}' -> '{matches[0]}'")
+                    contact_name = matches[0]  # Auto-corrects to the exact spelling
+                else:
+                    print(f"[!] No fuzzy match found for '{contact_name}'. Attempting raw payload.")
+                    
+            except FileNotFoundError:
+                print("[!] contacts.json not found. Proceeding with raw contact name.")
+            # -----------------------------------
+
+            return send_whatsapp_message(contact_name, message_body)
         elif action == "whatsapp_call":
             return make_whatsapp_call(target)
         elif action == "send_email":
@@ -165,26 +201,13 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
             os_name: str = platform.system()
             target_lower: str = target.lower().strip()
 
-            # --- ALIAS ROUTER FOR BUILT-IN OS APPS ---
-            if os_name == "Windows":
-                aliases = {
-                    "control panel": "control",
-                    "task manager": "taskmgr",
-                    "calculator": "calc",
-                    "settings": "ms-settings:",
-                    "notepad": "notepad",
-                    "command prompt": "cmd",
-                    "terminal": "wt"
-                }
-                if target_lower in aliases:
-                    target = aliases[target_lower]
-                    target_lower = target.lower()
-
             # --- THE "FORCE FOCUS" HACK ---
             # Bypasses Windows Focus Stealing Prevention so apps open in the foreground
             if os_name == "Windows":
                 try:
                     # 1. Tap the 'alt' key to register fake hardware input with the OS
+                    import pyautogui
+                    import ctypes
                     pyautogui.press('alt')
                     # 2. Tell the OS kernel to allow the next launched process to take the foreground
                     ctypes.windll.user32.AllowSetForegroundWindow(-1)
@@ -202,8 +225,10 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
                         os.startfile(target)
 
                 elif os_name == "Darwin": # macOS
+                    import subprocess
                     subprocess.run(["open", "-a", target], check=True, stderr=subprocess.DEVNULL)
                 elif os_name == "Linux":
+                    import subprocess
                     subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 return True, f"Execution protocol initiated for '{target}'."
@@ -215,6 +240,7 @@ def execute_action(action: str, target: Optional[str]) -> Tuple[bool, Optional[s
                 search_query = target.replace(' ', '+')
                 fallback_url = f"https://duckduckgo.com/?q=!ducky+{search_query}"
                 
+                import webbrowser
                 # Re-apply the focus hack right before the browser opens
                 if os_name == "Windows":
                     try:

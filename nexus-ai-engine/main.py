@@ -6,14 +6,18 @@ from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from core.voice_handler import speak
+from flask_cors import CORS  # <--- Add this import
+from faster_whisper import WhisperModel
+# --- SILENCE WARNINGS ---
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+print("[*] Loading Nexus Voice Core (Whisper Large-v3-Turbo)...")
+# 'large-v3-turbo' is the absolute bleeding edge for local, highly accurate transcription.
+# We use int8 compression so it doesn't melt your CPU while maintaining elite accuracy.
+whisper_model = WhisperModel("large-v3-turbo", device="cpu", compute_type="float32")
 
-# Safely handle CORS for seamless React/Node integration
-try:
-    from flask_cors import CORS
-    CORS_AVAILABLE: bool = True
-except ImportError:
-    CORS_AVAILABLE: bool = False
-
+app = Flask(__name__)
+CORS(app, supports_credentials=True, origins=["http://localhost:5173"])
 # --- ENGINE IMPORTS ---
 from core.engine import parse_intent, execute_action
 
@@ -24,10 +28,6 @@ NODE_BACKEND_URL: str = os.getenv("NODE_BACKEND_URL", "http://localhost:6446")
 AI_ENGINE_SECRET: str = os.getenv("AI_ENGINE_SECRET", "super_secret_nexus_key_2024")
 FLASK_PORT: int = int(os.getenv("FLASK_PORT", 5000))
 WEBHOOK_TIMEOUT: int = 15  # Maximum seconds to wait for Node.js acknowledgment
-
-app = Flask(__name__)
-if CORS_AVAILABLE:
-    CORS(app)  # Enables local testing directly from a browser or React frontend
 
 # --- ASYNCHRONOUS WORKER ---
 def process_command_background(command_id: str, prompt: str) -> None:
@@ -137,6 +137,46 @@ def execute_command():
         "message": "Execution sequence authorized and initiated."
     }), 202
 
+@app.route('/api/transcribe', methods=['POST'])
+def transcribe_audio():
+    if 'audio' not in request.files:
+        return jsonify({'success': False, 'message': 'No audio file provided'}), 400
+        
+    audio_file = request.files['audio']
+    temp_path = "temp_voice_command.webm"
+    
+    try:
+        # Save the raw audio from the browser
+        audio_file.save(temp_path)
+        
+        # --- MILITARY-GRADE LOCAL TRANSCRIPTION ---
+        segments, info = whisper_model.transcribe(
+            temp_path, 
+            beam_size=5,
+            language="en",
+            vad_filter=True, 
+            # threshold=0.6 forces the engine to ignore static and breathing. 
+            # It will ONLY transcribe if it is highly confident it hears a human voice.
+            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.6),
+            condition_on_previous_text=False,
+            # Whisper hates colons and labels. A natural, comma-separated string works flawlessly.
+            initial_prompt="BhanuPrakash, Vishnu, YGK, Nexus, WhatsApp, GammaAI, VisOra."
+        )
+        
+        # Stitch the transcribed segments together
+        transcription = " ".join([segment.text for segment in segments]).strip()
+        
+        # Clean up the temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        print(f"[🎙️] Nexus Transcribed: {transcription}")
+        return jsonify({'success': True, 'text': transcription})
+        
+    except Exception as e:
+        print(f"[X] Whisper Error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Diagnostic endpoint to verify engine uptime."""
@@ -151,7 +191,6 @@ if __name__ == '__main__':
     print(" 🚀 EXECUTION DAEMON ONLINE")
     print(f" 📍 Routing via: http://localhost:{FLASK_PORT}")
     print(f" 🔗 Synchronizing with: {NODE_BACKEND_URL}")
-    print(f" 🛡️ Security: Enforced | CORS: {'Active' if CORS_AVAILABLE else 'Inactive'}")
     print("="*55 + "\n")
     
     # use_reloader=False prevents Flask from booting the AI models twice into memory

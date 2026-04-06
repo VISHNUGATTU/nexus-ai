@@ -33,14 +33,13 @@ from core.web_researcher import perform_web_search
 # The AI will dynamically learn it upon the next execution.
 NEXUS_TOOLS = {
     "open_url": "Navigate to a website. Target: full URL. (Use this for 'open youtube' -> 'youtube.com').",
-    "open_app": "Launch a local application. Target: The exact OS executable command dynamically translated (e.g., 'open Control Panel' -> 'control'). Do not use display names.",
-    "chat": "General conversation, math calculations, coding questions, or knowledge NOT requiring a computer action. Target: null. (Provide the actual factual answer in the response field).",
+    "open_app": "Launch a local application or Windows Setting. Target: The exact OS executable or URI. For standard apps, use the system name (e.g., 'control', 'chrome'). For modern Windows settings, you MUST use the 'ms-settings:' URI protocol (e.g., 'ms-settings:network', 'ms-settings:bluetooth', 'ms-settings:display'). Do not use display names.",
     "play_youtube": "Stream media. Target: search query. (Only if user specifies a song/video to play).",
     "whatsapp_call": "Initiate a voice call. Target: contact name.",
     "whatsapp_message": "Send a text payload. Target: 'ContactName|Message'.",
     "open_local_file": "Locate and launch a document. Target: filename.",
     "send_email": "Transmit an email. Target: 'EmailAddress|Subject|Body'.",
-    "system_control": "Hardware/OS control. Target: 'mute', 'volume_up', 'volume_down', 'play_pause', 'lock'.",
+    "system_control": "Hardware/OS control. Target: 'mute', 'volume_up', 'volume_down', 'play_pause', 'lock', 'toggle_backlight', 'check_updates', 'list_apps'.",
     "take_note": "Record information to the Second Brain. Target: note content.",
     "check_stock": "Live financial data. Target: Stock Ticker Symbol (e.g., TSLA).",
     "check_vitals": "Hardware telemetry (CPU, RAM). Target: null.",
